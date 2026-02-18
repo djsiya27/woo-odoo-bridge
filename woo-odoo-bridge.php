@@ -2,7 +2,7 @@
 /**
  * Plugin Name: Woo Odoo Bridge
  * Description: Bi-directional WooCommerce ↔ Odoo integration.
- * Version: 1.0.7
+ * Version: 1.0.8
  * Author: Siyabonga Majola
  * GitHub Plugin URI: https://github.com/djsiya27/woo-odoo-bridge
  * Primary Branch: main
