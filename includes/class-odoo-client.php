@@ -1,5 +1,9 @@
 <?php
 
+if (!defined('ABSPATH')) {
+    exit;
+}
+
 class Woo_Odoo_Client {
 
     private $url;
@@ -9,16 +13,24 @@ class Woo_Odoo_Client {
     private $uid = null;
 
     public function __construct() {
-        $this->url      = get_option('woo_odoo_url');
+        $this->url      = rtrim(get_option('woo_odoo_url'), '/');
         $this->db       = get_option('woo_odoo_db');
         $this->username = get_option('woo_odoo_username');
         $this->password = get_option('woo_odoo_password');
     }
 
+    /*
+    ==================================================
+    LOW LEVEL REQUEST
+    ==================================================
+    */
+
     private function request($payload) {
 
         $response = wp_remote_post($this->url . '/jsonrpc', [
-            'headers' => ['Content-Type' => 'application/json'],
+            'headers' => [
+                'Content-Type' => 'application/json'
+            ],
             'body'    => json_encode($payload),
             'timeout' => 20,
         ]);
@@ -33,6 +45,12 @@ class Woo_Odoo_Client {
         return $body;
     }
 
+    /*
+    ==================================================
+    LOGIN
+    ==================================================
+    */
+
     public function login() {
 
         $payload = [
@@ -41,7 +59,11 @@ class Woo_Odoo_Client {
             'params'  => [
                 'service' => 'common',
                 'method'  => 'login',
-                'args'    => [$this->db, $this->username, $this->password]
+                'args'    => [
+                    $this->db,
+                    $this->username,
+                    $this->password
+                ]
             ]
         ];
 
@@ -57,6 +79,12 @@ class Woo_Odoo_Client {
         return false;
     }
 
+    /*
+    ==================================================
+    EXECUTE (FIXED VERSION)
+    ==================================================
+    */
+
     public function execute($model, $method, $args = [], $kwargs = []) {
 
         if (!$this->uid) {
@@ -67,21 +95,28 @@ class Woo_Odoo_Client {
 
         error_log("Odoo EXECUTE: {$model} -> {$method}");
 
+        // Core execute arguments
+        $execute_args = [
+            $this->db,
+            $this->uid,
+            $this->password,
+            $model,
+            $method,
+            $args
+        ];
+
+        // 🔥 Only include kwargs if NOT empty
+        if (!empty($kwargs)) {
+            $execute_args[] = $kwargs;
+        }
+
         $payload = [
             'jsonrpc' => '2.0',
             'method'  => 'call',
             'params'  => [
                 'service' => 'object',
                 'method'  => 'execute_kw',
-                'args'    => [
-                    $this->db,
-                    $this->uid,
-                    $this->password,
-                    $model,
-                    $method,
-                    $args,
-                    $kwargs
-                ]
+                'args'    => $execute_args
             ]
         ];
 
