@@ -12,7 +12,6 @@ class Woo_Odoo_Product_Sync {
 
     public function sync_product($post_id, $post, $update) {
 
-        // Prevent autosave/revisions
         if (defined('DOING_AUTOSAVE') && DOING_AUTOSAVE) return;
         if (wp_is_post_revision($post_id)) return;
         if (wp_is_post_autosave($post_id)) return;
@@ -30,7 +29,7 @@ class Woo_Odoo_Product_Sync {
 
         /*
         ==================================================
-        TEMPLATE SYNC (SAFE + SERIALIZATION FIX)
+        TEMPLATE SYNC
         ==================================================
         */
 
@@ -43,7 +42,6 @@ class Woo_Odoo_Product_Sync {
 
         $stored_id = get_post_meta($post_id, '_odoo_product_id', true);
 
-        // 🔥 Fix serialized array issue
         if (is_array($stored_id)) {
             $stored_id = reset($stored_id);
         }
@@ -51,7 +49,6 @@ class Woo_Odoo_Product_Sync {
         $stored_id = $stored_id ? (int)$stored_id : null;
         $odoo_id   = null;
 
-        // Verify stored template exists
         if ($stored_id) {
 
             $exists = $odoo->execute('product.template', 'search', [
@@ -72,7 +69,6 @@ class Woo_Odoo_Product_Sync {
             }
         }
 
-        // If no valid stored ID → search or create
         if (!$stored_id) {
 
             $search = $odoo->execute('product.template', 'search', [
@@ -100,147 +96,232 @@ class Woo_Odoo_Product_Sync {
                 }
             }
 
-            // 🔥 Always store as integer (not array)
             update_post_meta($post_id, '_odoo_product_id', (int)$odoo_id);
         }
 
         /*
         ==================================================
-        VARIABLE PRODUCT ATTRIBUTE SYNC
+        ATTRIBUTE SYNC (VARIABLE PRODUCTS)
         ==================================================
         */
 
-        if (!$product->is_type('variable')) {
-            return;
-        }
+        if ($product->is_type('variable')) {
 
-        $attributes = $product->get_attributes();
+            $attributes = $product->get_attributes();
 
-        foreach ($attributes as $attribute) {
+            foreach ($attributes as $attribute) {
 
-            if (!$attribute->get_variation()) continue;
+                if (!$attribute->get_variation()) continue;
 
-            // Handle global taxonomy attributes
-            if ($attribute->is_taxonomy()) {
+                if ($attribute->is_taxonomy()) {
 
-                $attribute_name = wc_attribute_label($attribute->get_name());
+                    $attribute_name = wc_attribute_label($attribute->get_name());
 
-                $options = wc_get_product_terms(
-                    $post_id,
-                    $attribute->get_name(),
-                    ['fields' => 'names']
-                );
+                    $options = wc_get_product_terms(
+                        $post_id,
+                        $attribute->get_name(),
+                        ['fields' => 'names']
+                    );
 
-            } else {
+                } else {
 
-                $attribute_name = $attribute->get_name();
-                $options = $attribute->get_options();
-            }
+                    $attribute_name = $attribute->get_name();
+                    $options = $attribute->get_options();
+                }
 
-            /*
-            ----------------------------
-            Find or Create Attribute
-            ----------------------------
-            */
-
-            $attr_search = $odoo->execute('product.attribute', 'search', [
-                [['name', '=', $attribute_name]]
-            ]);
-
-            $attr_id = !empty($attr_search['result']) ? (int)$attr_search['result'][0] : null;
-
-            if (!$attr_id) {
-
-                $create_attr = $odoo->execute('product.attribute', 'create', [
-                    [[
-                        'name' => $attribute_name,
-                        'create_variant' => 'always'
-                    ]]
+                $attr_search = $odoo->execute('product.attribute', 'search', [
+                    [['name', '=', $attribute_name]]
                 ]);
 
-                $attr_id = $create_attr['result'] ?? null;
-            }
+                $attr_id = !empty($attr_search['result']) ? (int)$attr_search['result'][0] : null;
 
-            if (!$attr_id) continue;
+                if (!$attr_id) {
 
-            /*
-            ----------------------------
-            Find or Create Values
-            ----------------------------
-            */
+                    $create_attr = $odoo->execute('product.attribute', 'create', [
+                        [[
+                            'name' => $attribute_name,
+                            'create_variant' => 'always'
+                        ]]
+                    ]);
 
-            $value_ids = [];
+                    $attr_id = $create_attr['result'] ?? null;
+                }
 
-            foreach ($options as $option) {
+                if (!$attr_id) continue;
 
-                $value_search = $odoo->execute('product.attribute.value', 'search', [
+                $value_ids = [];
+
+                foreach ($options as $option) {
+
+                    $value_search = $odoo->execute('product.attribute.value', 'search', [
+                        [
+                            ['name', '=', $option],
+                            ['attribute_id', '=', $attr_id]
+                        ]
+                    ]);
+
+                    $value_id = !empty($value_search['result']) ? (int)$value_search['result'][0] : null;
+
+                    if (!$value_id) {
+
+                        $create_val = $odoo->execute('product.attribute.value', 'create', [
+                            [[
+                                'name' => $option,
+                                'attribute_id' => $attr_id
+                            ]]
+                        ]);
+
+                        $value_id = $create_val['result'] ?? null;
+                    }
+
+                    if ($value_id) {
+                        $value_ids[] = $value_id;
+                    }
+                }
+
+                if (empty($value_ids)) continue;
+
+                $line_search = $odoo->execute('product.template.attribute.line', 'search', [
                     [
-                        ['name', '=', $option],
+                        ['product_tmpl_id', '=', $odoo_id],
                         ['attribute_id', '=', $attr_id]
                     ]
                 ]);
 
-                $value_id = !empty($value_search['result']) ? (int)$value_search['result'][0] : null;
+                $line_id = !empty($line_search['result']) ? (int)$line_search['result'][0] : null;
 
-                if (!$value_id) {
+                if ($line_id) {
 
-                    $create_val = $odoo->execute('product.attribute.value', 'create', [
-                        [[
-                            'name' => $option,
-                            'attribute_id' => $attr_id
-                        ]]
+                    $odoo->execute('product.template.attribute.line', 'write', [
+                        [$line_id],
+                        ['value_ids' => [[6, 0, $value_ids]]]
                     ]);
 
-                    $value_id = $create_val['result'] ?? null;
-                }
+                } else {
 
-                if ($value_id) {
-                    $value_ids[] = $value_id;
+                    $odoo->execute('product.template.attribute.line', 'create', [
+                        [[
+                            'product_tmpl_id' => $odoo_id,
+                            'attribute_id'    => $attr_id,
+                            'value_ids'       => [[6, 0, $value_ids]]
+                        ]]
+                    ]);
                 }
             }
 
-            if (empty($value_ids)) continue;
+            // Force regenerate variants
+            $odoo->execute('product.template', 'write', [
+                [$odoo_id],
+                []
+            ]);
+        }
 
-            /*
-            ----------------------------
-            Update or Create Attribute Line
-            ----------------------------
-            */
+        /*
+        ==================================================
+        STOCK SYNC (Woo → Odoo)
+        ==================================================
+        */
 
-            $line_search = $odoo->execute('product.template.attribute.line', 'search', [
-                [
-                    ['product_tmpl_id', '=', $odoo_id],
-                    ['attribute_id', '=', $attr_id]
-                ]
+        $this->sync_stock($product, $odoo, $odoo_id);
+    }
+
+    /*
+    ==================================================
+    STOCK SYNC METHOD
+    ==================================================
+    */
+
+    private function sync_stock($product, $odoo, $odoo_template_id) {
+
+        if (!$product->managing_stock()) return;
+
+        // Get internal stock location (WH/Stock)
+        $location = $odoo->execute('stock.location', 'search_read', [
+            [['usage', '=', 'internal']],
+            ['fields' => ['id'], 'limit' => 1]
+        ]);
+
+        if (empty($location['result'])) return;
+
+        $location_id = (int)$location['result'][0]['id'];
+
+        if ($product->is_type('simple')) {
+
+            $variants = $odoo->execute('product.product', 'search_read', [
+                [['product_tmpl_id', '=', $odoo_template_id]],
+                ['fields' => ['id']]
             ]);
 
-            $line_id = !empty($line_search['result']) ? (int)$line_search['result'][0] : null;
+            if (empty($variants['result'])) return;
 
-            if ($line_id) {
+            $variant_id = (int)$variants['result'][0]['id'];
+            $qty = (float)$product->get_stock_quantity();
 
-                $odoo->execute('product.template.attribute.line', 'write', [
-                    [$line_id],
-                    [
-                        'value_ids' => [[6, 0, $value_ids]]
-                    ]
+            $this->update_stock($odoo, $variant_id, $location_id, $qty);
+        }
+
+        if ($product->is_type('variable')) {
+
+            foreach ($product->get_children() as $child_id) {
+
+                $variation = wc_get_product($child_id);
+                if (!$variation->managing_stock()) continue;
+
+                $sku = $variation->get_sku();
+                $qty = (float)$variation->get_stock_quantity();
+
+                $search = $odoo->execute('product.product', 'search_read', [
+                    [['default_code', '=', $sku]],
+                    ['fields' => ['id']]
                 ]);
 
-            } else {
+                if (empty($search['result'])) continue;
 
-                $odoo->execute('product.template.attribute.line', 'create', [
-                    [[
-                        'product_tmpl_id' => $odoo_id,
-                        'attribute_id'    => $attr_id,
-                        'value_ids'       => [[6, 0, $value_ids]]
-                    ]]
+                $variant_id = (int)$search['result'][0]['id'];
+
+                $this->update_stock($odoo, $variant_id, $location_id, $qty);
+            }
+        }
+    }
+
+    private function update_stock($odoo, $variant_id, $location_id, $qty) {
+
+        // Find existing quant
+        $quant = $odoo->execute('stock.quant', 'search_read', [
+            [
+                ['product_id', '=', $variant_id],
+                ['location_id', '=', $location_id]
+            ],
+            ['fields' => ['id']]
+        ]);
+
+        if (!empty($quant['result'])) {
+
+            $quant_id = (int)$quant['result'][0]['id'];
+
+            $odoo->execute('stock.quant', 'write', [
+                [$quant_id],
+                ['inventory_quantity' => $qty]
+            ]);
+
+            $odoo->execute('stock.quant', 'action_apply_inventory', [
+                [$quant_id]
+            ]);
+
+        } else {
+
+            $create = $odoo->execute('stock.quant', 'create', [[
+                'product_id'         => $variant_id,
+                'location_id'        => $location_id,
+                'inventory_quantity' => $qty
+            ]]);
+
+            if (!empty($create['result'])) {
+
+                $odoo->execute('stock.quant', 'action_apply_inventory', [
+                    [(int)$create['result']]
                 ]);
             }
         }
-
-        // Trigger variant regeneration
-        $odoo->execute('product.template', 'write', [
-            [$odoo_id],
-            []
-        ]);
     }
 }
