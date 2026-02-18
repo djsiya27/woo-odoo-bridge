@@ -217,7 +217,7 @@ class Woo_Odoo_Product_Sync {
 
         /*
         ==================================================
-        STOCK SYNC (Odoo 17 SAFE)
+        STOCK SYNC (FORCED WH/STOCK = ID 8)
         ==================================================
         */
 
@@ -228,14 +228,7 @@ class Woo_Odoo_Product_Sync {
 
         if (!$product->managing_stock()) return;
 
-        $location = $odoo->execute('stock.location', 'search_read', [
-            [['usage', '=', 'internal']],
-            ['fields' => ['id'], 'limit' => 1]
-        ]);
-
-        if (empty($location['result'])) return;
-
-        $location_id = (int)$location['result'][0]['id'];
+        $location_id = 8; // WH/Stock confirmed ID
 
         if ($product->is_type('simple')) {
 
