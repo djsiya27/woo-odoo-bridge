@@ -119,21 +119,51 @@ class Woo_Odoo_Product_Sync {
 
         if (!$product->managing_stock()) return;
 
-        // VERIFY THIS MATCHES YOUR WH/STOCK ID
+        // IMPORTANT: Confirm this matches your WH/Stock ID
         $location_id = 8;
 
-        // Get variant
         $variants = $odoo->execute('product.product', 'search_read', [
             [['product_tmpl_id', '=', $odoo_template_id]],
-            ['fields' => ['id']]
+            ['fields' => ['id', 'default_code']]
         ]);
 
-        if (empty($variants['result'])) return;
+        if (empty($variants['result'])) {
+            error_log('No Odoo variants found for template: ' . $odoo_template_id);
+            return;
+        }
 
-        $variant_id = (int)$variants['result'][0]['id'];
-        $qty = (float)$product->get_stock_quantity();
+        // SIMPLE PRODUCT
+        if ($product->is_type('simple')) {
 
-        $this->update_stock($odoo, $variant_id, $location_id, $qty);
+            $variant_id = (int)$variants['result'][0]['id'];
+            $qty = (float)$product->get_stock_quantity();
+
+            $this->update_stock($odoo, $variant_id, $location_id, $qty);
+        }
+
+        // VARIABLE PRODUCT
+        if ($product->is_type('variable')) {
+
+            foreach ($product->get_children() as $child_id) {
+
+                $variation = wc_get_product($child_id);
+                if (!$variation || !$variation->managing_stock()) continue;
+
+                $sku = $variation->get_sku();
+                if (!$sku) continue;
+
+                $qty = (float)$variation->get_stock_quantity();
+
+                foreach ($variants['result'] as $odoo_variant) {
+
+                    if ($odoo_variant['default_code'] === $sku) {
+
+                        $variant_id = (int)$odoo_variant['id'];
+                        $this->update_stock($odoo, $variant_id, $location_id, $qty);
+                    }
+                }
+            }
+        }
     }
 
     /*
@@ -148,37 +178,48 @@ class Woo_Odoo_Product_Sync {
 
         $qty = (float)$qty;
 
-        // Search quant
-        $search = $odoo->execute('stock.quant', 'search', [
+        // Search existing quant
+        $quant = $odoo->execute('stock.quant', 'search_read', [
             [
                 ['product_id', '=', (int)$variant_id],
                 ['location_id', '=', (int)$location_id]
-            ]
+            ],
+            ['fields' => ['id', 'quantity']]
         ]);
 
-        $quant_id = !empty($search['result']) ? (int)$search['result'][0] : null;
+        if (!empty($quant['result'])) {
 
-        if (!$quant_id) {
+            $quant_id = (int)$quant['result'][0]['id'];
+
+            $odoo->execute('stock.quant', 'write', [
+                [$quant_id],
+                ['inventory_quantity' => $qty]
+            ]);
+
+            $odoo->execute('stock.quant', 'action_apply_inventory', [
+                [$quant_id]
+            ]);
+
+        } else {
 
             $create = $odoo->execute('stock.quant', 'create', [[
-                'product_id'  => (int)$variant_id,
-                'location_id' => (int)$location_id
+                'product_id'        => (int)$variant_id,
+                'location_id'       => (int)$location_id,
+                'inventory_quantity'=> $qty
             ]]);
 
-            if (empty($create['result'])) return;
+            if (empty($create['result'])) {
+                error_log('Failed creating quant for variant: ' . $variant_id);
+                return;
+            }
 
             $quant_id = (int)$create['result'];
+
+            $odoo->execute('stock.quant', 'action_apply_inventory', [
+                [$quant_id]
+            ]);
         }
 
-        // Set inventory quantity
-        $odoo->execute('stock.quant', 'write', [
-            [$quant_id],
-            ['inventory_quantity' => $qty]
-        ]);
-
-        // APPLY inventory adjustment (CRITICAL)
-        $odoo->execute('stock.quant', 'action_apply_inventory', [
-            [$quant_id]
-        ]);
+        error_log("Stock synced for variant {$variant_id} → Qty: {$qty}");
     }
 }
