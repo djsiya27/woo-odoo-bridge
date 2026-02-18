@@ -101,7 +101,7 @@ class Woo_Odoo_Product_Sync {
 
         /*
         ==================================================
-        ATTRIBUTE SYNC (VARIABLE PRODUCTS)
+        ATTRIBUTE SYNC
         ==================================================
         */
 
@@ -209,7 +209,6 @@ class Woo_Odoo_Product_Sync {
                 }
             }
 
-            // Force regenerate variants
             $odoo->execute('product.template', 'write', [
                 [$odoo_id],
                 []
@@ -218,24 +217,17 @@ class Woo_Odoo_Product_Sync {
 
         /*
         ==================================================
-        STOCK SYNC (Woo → Odoo)
+        STOCK SYNC (Odoo 17 SAFE)
         ==================================================
         */
 
         $this->sync_stock($product, $odoo, $odoo_id);
     }
 
-    /*
-    ==================================================
-    STOCK SYNC METHOD
-    ==================================================
-    */
-
     private function sync_stock($product, $odoo, $odoo_template_id) {
 
         if (!$product->managing_stock()) return;
 
-        // Get internal stock location (WH/Stock)
         $location = $odoo->execute('stock.location', 'search_read', [
             [['usage', '=', 'internal']],
             ['fields' => ['id'], 'limit' => 1]
@@ -286,42 +278,22 @@ class Woo_Odoo_Product_Sync {
 
     private function update_stock($odoo, $variant_id, $location_id, $qty) {
 
-        // Find existing quant
-        $quant = $odoo->execute('stock.quant', 'search_read', [
-            [
-                ['product_id', '=', $variant_id],
-                ['location_id', '=', $location_id]
-            ],
-            ['fields' => ['id']]
+        if ($qty === null) return;
+
+        $qty = (float)$qty;
+
+        $wizard = $odoo->execute('stock.change.product.qty', 'create', [[
+            'product_id'   => (int)$variant_id,
+            'new_quantity' => $qty,
+            'location_id'  => (int)$location_id
+        ]]);
+
+        if (empty($wizard['result'])) return;
+
+        $wizard_id = (int)$wizard['result'];
+
+        $odoo->execute('stock.change.product.qty', 'change_product_qty', [
+            [$wizard_id]
         ]);
-
-        if (!empty($quant['result'])) {
-
-            $quant_id = (int)$quant['result'][0]['id'];
-
-            $odoo->execute('stock.quant', 'write', [
-                [$quant_id],
-                ['inventory_quantity' => $qty]
-            ]);
-
-            $odoo->execute('stock.quant', 'action_apply_inventory', [
-                [$quant_id]
-            ]);
-
-        } else {
-
-            $create = $odoo->execute('stock.quant', 'create', [[
-                'product_id'         => $variant_id,
-                'location_id'        => $location_id,
-                'inventory_quantity' => $qty
-            ]]);
-
-            if (!empty($create['result'])) {
-
-                $odoo->execute('stock.quant', 'action_apply_inventory', [
-                    [(int)$create['result']]
-                ]);
-            }
-        }
     }
 }
