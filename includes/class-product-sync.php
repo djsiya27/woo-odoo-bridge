@@ -29,7 +29,7 @@ class Woo_Odoo_Product_Sync {
 
         /*
         ==================================================
-        TEMPLATE SYNC
+        PRODUCT TEMPLATE SYNC
         ==================================================
         */
 
@@ -92,14 +92,12 @@ class Woo_Odoo_Product_Sync {
                     [$data]
                 ]);
 
-                if (!empty($create['result'])) {
-                    $odoo_id = (int)$create['result'];
-                } else {
-                    return;
-                }
+                if (empty($create['result'])) return;
+
+                $odoo_id = (int)$create['result'];
             }
 
-            update_post_meta($post_id, '_odoo_product_id', (int)$odoo_id);
+            update_post_meta($post_id, '_odoo_product_id', $odoo_id);
         }
 
         /*
@@ -113,7 +111,7 @@ class Woo_Odoo_Product_Sync {
 
     /*
     ==================================================
-    STOCK SYNC (Odoo 17 Safe)
+    STOCK SYNC
     ==================================================
     */
 
@@ -121,9 +119,10 @@ class Woo_Odoo_Product_Sync {
 
         if (!$product->managing_stock()) return;
 
-        $location_id = 8; // CONFIRM THIS IS YOUR WH/Stock ID
+        // VERIFY THIS MATCHES YOUR WH/STOCK ID
+        $location_id = 8;
 
-        // Get variant from template
+        // Get variant
         $variants = $odoo->execute('product.product', 'search_read', [
             [['product_tmpl_id', '=', $odoo_template_id]],
             ['fields' => ['id']]
@@ -139,7 +138,7 @@ class Woo_Odoo_Product_Sync {
 
     /*
     ==================================================
-    ODOO 17 STOCK UPDATE (QUANT METHOD)
+    ODOO 17 SAFE STOCK UPDATE
     ==================================================
     */
 
@@ -149,7 +148,7 @@ class Woo_Odoo_Product_Sync {
 
         $qty = (float)$qty;
 
-        // Search existing quant
+        // Search quant
         $search = $odoo->execute('stock.quant', 'search', [
             [
                 ['product_id', '=', (int)$variant_id],
@@ -159,31 +158,27 @@ class Woo_Odoo_Product_Sync {
 
         $quant_id = !empty($search['result']) ? (int)$search['result'][0] : null;
 
-        if ($quant_id) {
+        if (!$quant_id) {
 
-            // Set inventory quantity
-            $odoo->execute('stock.quant', 'write', [
-                [$quant_id],
-                ['inventory_quantity' => $qty]
-            ]);
-
-        } else {
-
-            // Create new quant
             $create = $odoo->execute('stock.quant', 'create', [[
-                'product_id'        => (int)$variant_id,
-                'location_id'       => (int)$location_id,
-                'inventory_quantity'=> $qty
+                'product_id'  => (int)$variant_id,
+                'location_id' => (int)$location_id
             ]]);
 
-            $quant_id = $create['result'] ?? null;
+            if (empty($create['result'])) return;
+
+            $quant_id = (int)$create['result'];
         }
 
-        if (!$quant_id) return;
+        // Set inventory quantity
+        $odoo->execute('stock.quant', 'write', [
+            [$quant_id],
+            ['inventory_quantity' => $qty]
+        ]);
 
-        // Apply inventory adjustment
+        // APPLY inventory adjustment (CRITICAL)
         $odoo->execute('stock.quant', 'action_apply_inventory', [
-            []
+            [$quant_id]
         ]);
     }
 }
